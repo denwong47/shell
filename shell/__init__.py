@@ -37,14 +37,25 @@ def run(
         ignore_codes = []
 
     with execute_timer(echo=False) as _timer:
-        _pipe = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=isinstance(command, str),
-            )
+        try:
+            _pipe = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=isinstance(command, str),
+                )
+            _stdout, _stderr = _pipe.communicate()
 
-    _stdout, _stderr = _pipe.communicate()
+        # when an unknown command is called, subprocess actually triggers
+        # a FileNotFoundError instead of error code 127 like shell would
+        except FileNotFoundError as e:
+            return ShellReturnedFailure(
+                "Shell command not found.",
+                exit_code=127,
+                command=command,
+                stdout="",
+                time_used=_timer.lapsed(),
+            )
 
     if (_pipe.returncode != 0 and not _pipe.returncode in ignore_codes):
         _stderr = _stderr.decode("utf-8")
