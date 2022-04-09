@@ -1,32 +1,12 @@
+#!/usr/bin/env python3
+
 import subprocess
 import shlex
 from typing import Any, Dict, Iterable, List, Union
 
 from execute_timer import execute_timer
 
-class ShellError(Exception):
-    def __bool__(self):
-        return False
-    __nonzero__ = __bool__
-
-class ShellReturnedFailure(RuntimeError, ShellError):
-    def __init__(
-        self,
-        message:str,
-        exit_code:int=0,
-        command:list=[],
-        stdout:str="",
-        time_used:float=0,
-    ):
-        super().__init__(message)
-
-        self.exit_code = exit_code
-        self.command = command
-        self.stdout = stdout
-        self.stderr = message
-        self.time_used = time_used
-
-
+from shell.exceptions import ShellReturnedFailure
 
 def run(
     command:list,
@@ -36,6 +16,12 @@ def run(
     ignore_codes:list=[],
     timeout:float=None,
 ):
+    """
+    Old functional implementation of shell command execution.
+    
+    TODO rewrite using ShellCommand.
+    """
+
     if (isinstance(command, str) and safe_mode):
         command = shlex.split(command)
 
@@ -110,71 +96,4 @@ def check_command_exists(
             return False
 
     return True
-
-
-
-class ShellCommandExists():
-    """
-    A psuedo-Singleton class that create only one instance of each unique 'command' value.
-    This avoids spending time running subprocesses more than once.
-    """
-
-    _instances={}   # this dict is shared by all instances, do not create a new one
-
-    exists = None
-
-    def __new__(
-        cls,
-        command:Union[
-            List[str],
-            str
-        ],
-        *args,
-        **kwargs,
-    ):
-        """
-        Create new instance if cls(command) was not called before;
-            otherwise return the instance that already exists.
-        Put the instance back into the library.
-        """
-
-        _instance = cls._instances.get(
-            command,
-            super().__new__(cls)
-        )
-
-        cls._instances[command] = _instance
-
-        return _instance
-    
-    def __init__(
-        self,
-        command:Union[
-            List[str],
-            str
-        ],
-        *args,
-        **kwargs,
-    ):
-        """
-        Check if command exists, then store it in self.exists.
-        """
-
-        self.command = command
-
-        # Avoids running this twice if __new__() returned an existing instance
-        if (self.exists is None):
-            self.exists = check_command_exists(command)
-
-    def __bool__(
-        self,
-    ):
-        return self.exists
-
-    __nonzero__ = __bool__
-
-    def __repr__(
-        self,
-    ):
-        return f"{type(self).__name__}(command={repr(self.command)}, exists={repr(self.exists)})"
 
