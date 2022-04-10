@@ -13,3 +13,4 @@ from shell.api import ShellCommandExists
 
 
 import shell.classes as classes
+from shell.classes import ShellCommand

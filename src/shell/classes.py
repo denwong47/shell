@@ -4,8 +4,10 @@ import shlex
 import subprocess
 import threading
 import time as timer
+import warnings
 
 from typing import Any, Callable, Dict, Iterable, List, Union
+from xml.sax.handler import property_declaration_handler
 
 
 from shell.exceptions import    InvalidParameterError, \
@@ -50,6 +52,11 @@ class ShellCommand():
         self.stderr = None
         self.time_used = None
 
+    def __repr__(
+        self,
+    )->str:
+        return f"{type(self).__name__}(command={repr(self.command)}, output={self.output.__name__}, ignore_codes={repr(self.ignore_codes)}, timeout={repr(self.timeout)})"
+
     def __enter__(
         self,
     ):
@@ -85,6 +92,13 @@ class ShellCommand():
         """
         command.setter
         Protect against shell injection.
+
+        DO NOT EVER SPLIT AGAINST | OPERATOR:
+        the premise of a ShellCommand is that it should only be one single shell command;
+        if the stdout needs to be piped into another process, another instance of ShellCommand should be created.
+
+        If we split against | and execute all the commands anyway, this negates the shlex.split
+        and make the command vulnerable to shell injection again.
         """
 
         if (isinstance(value, str)):
@@ -94,6 +108,24 @@ class ShellCommand():
             raise InvalidParameterError(f"str or list types expected for command, {type(value).__name__} found.")
         else:
             self._command = value
+
+    @property
+    def can_run(
+        self,
+    )->bool:
+        """
+        Check if the subprocess exists and can be run.
+        """
+        return isinstance(self.process, subprocess.Popen)
+
+    @property
+    def has_run(
+        self,
+    )->bool:
+        """
+        Check if the subprocess has ever been run.
+        """
+        return self.time_used is not None or self.timer_start is not None
 
     @property
     def alive(
@@ -148,11 +180,12 @@ class ShellCommand():
             # when an unknown command is called, subprocess actually triggers
             # a FileNotFoundError instead of error code 127 like shell would
             except FileNotFoundError as e:
-                return self.set_result(
+                self.set_result(
                     exit_code=127,
                     stdout=b"",
-                    stderr=b"Shell command not found.",
+                    stderr=f"Shell command '{self.command[0]}' not found.".encode("utf-8"),
                 )
+                return self.result
         else:
             return ShellProcessAlreadyRunning(f"Subprocess for {' '.join(self.command)} is already running at PID {self.process.pid}.")
 
@@ -161,19 +194,44 @@ class ShellCommand():
         stdin:bytes=None,
     )->Union[bytes, str, ShellReturnedFailure]:
         """
-        Pipe stdin in, 
+        Pipe stdin in, and wait for the 
         """
 
-        try:
-            _stdout, _stderr = self.process.communicate(input=stdin, timeout=self.timeout)
-        except subprocess.TimeoutExpired as e:
-            return self.kill()
+        if (isinstance(stdin, str)):
+            stdin = stdin.encode("utf-8")
 
-        return self.set_result(
-            stdout = _stdout,
-            stderr = _stderr,
-        )
-        
+        if (self.can_run):
+            try:
+                _stdout, _stderr = self.process.communicate(input=stdin, timeout=self.timeout)
+            except subprocess.TimeoutExpired as e:
+                return self.kill()
+
+            return self.set_result(
+                exit_code = self.process.returncode,
+                stdout = _stdout,
+                stderr = _stderr,
+            )
+        else:
+            return self.result
+
+    def run(
+        self,
+        stdin:bytes=None,
+    )->Union[bytes, str, ShellReturnedFailure]:
+        """
+        Run the command once in blocking mode, then return the result.
+        """
+
+        if (isinstance(stdin, str)):
+            stdin = stdin.encode("utf-8")
+
+        if (not self.has_run):
+            self.start()
+
+        if (self.alive):
+            self.end(stdin)
+
+        return self.result
 
     def set_result(
         self,
@@ -184,7 +242,6 @@ class ShellCommand():
         """
         Put all the results into attributes
         """
-
         time_used = self.lapsed
         self.end_timer()
 
@@ -193,13 +250,11 @@ class ShellCommand():
 
         if (self.output is str):
             self.stdout = stdout.decode("utf-8")
-        else:
-            self.stdout = stdout
-        
-        if (self.output is str):
             self.stderr = stderr.decode("utf-8")
         else:
+            self.stdout = stdout
             self.stderr = stderr
+            
 
         self.time_used = time_used
 
@@ -215,12 +270,14 @@ class ShellCommand():
         - ShellReturnedFailure if not
         """
 
-        if (self.exit_code == 0 or \
+        if (self.exit_code is None):
+            return ShellProcessInactive("Shell process have not returned any results.")
+        elif (self.exit_code == 0 or \
             self.exit_code in self.ignore_codes):
             return self.stdout
         else:
             return ShellReturnedFailure(
-                message = self.stderr,
+                stderr = self.stderr,
                 exit_code = self.exit_code,
                 command = self.command,
                 stdout = self.stdout,
@@ -267,6 +324,10 @@ class ShellCommand():
         self,
         exit_code=None,
     )->Union[bytes, str, ShellReturnedFailure]:
+        """
+        Kill the process, and get the result.
+        """
+
         self.process.kill()
 
         _stdout, _stderr = self.process.communicate()
@@ -298,15 +359,14 @@ class ShellCommand():
         data:Union[bytes, str],
     )->None:
         """
-
+        Write data to stdin pipe of the process.
+        Usually used repeated in a loop to stream data.
         """
 
         if (isinstance(data, str)):
             data = data.encode("utf-8")
 
         self.process.stdin.write(data)
-
-    
 
     @alive_only
     def stream_stdout(
@@ -347,11 +407,84 @@ class ShellCommand():
         threading.Thread(target=_push_data).start()
 
     def __or__(self, other):
-        # TODO pipe self.stdout into other.stdin
-        # then return the whole instance of other
-        pass
+        """
+        Pipe the stdout from self into other.
+        """
 
+        if (isinstance(other, ShellCommand)):
+            # If the command has not run, then run it without stdin.
+            # If stdin is required, call the command first.
+            if (not self.has_run):
+                self.run()
 
-    def __lt__(self, path):
-        # TODO pipe self.stdout into a file at path
-        pass
+            if (other.has_run and not other.alive):
+                raise ShellProcessAlreadyRunning("stdout pipe destination process has already completed.")
+
+            _result = self.result
+            # Fetch own result
+            
+            if (not isinstance(_result, ShellReturnedFailure)):
+                # Check result is valid
+                if (isinstance(_result, str)):
+                    _result = _result.encode("utf-8")
+
+                # Start and end the other process
+                other.run(
+                    stdin = _result,
+                )
+
+                # Return the other process instance;
+                # - This allows multiple |s to be chained together as per actual shell.
+                return other
+            else:
+                # If the first command didn't succeed, then raise the Exception.
+                raise _result
+        else:
+            # This is not a genuine method for logical operation.
+            # If we are operating on something else, raise an error.
+            return InvalidParameterError(f"| operator can only be used between two instances of ShellCommand, but {type(other).__name__} found.")
+
+    def __gt__(self, path):
+        """
+        Pipe the stdout from self into a file.
+        This replaces the contents of a file.
+        Append operator is not supported.
+        """
+        
+        if (not isinstance(path, str)):
+            # This is not a genuine method for comparison.
+            # If we are comparing something else, raise an error.
+            return InvalidParameterError(f"> operator can only be used between from a ShellCommand on a str, but {type(path).__name__} found.")
+
+        # If we haven't been run, the do so
+        if (not self.has_run):
+            self.run()
+
+        # Get the stdout from self
+        _result = self.result
+        if (isinstance(_result, str)):
+            _result = _result.encode("utf-8")
+        elif (isinstance(_result, bytes)):
+            pass
+        else:
+            raise _result
+            return _result
+
+        try:
+            with open(path, "w+b") as _f:
+                _f.write(_result)
+            
+            return True
+        except (PermissionError,
+                OSError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+                ) as e:
+            warnings.warn(
+                RuntimeWarning(
+                    f"Cannot pipe stdout to file: {str(e)}",
+                )
+            )
+            return False
+    
