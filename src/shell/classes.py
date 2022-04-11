@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import abc
 import io
 import shlex
 import subprocess
@@ -7,19 +8,331 @@ import time as timer
 import warnings
 
 from typing import Any, Callable, Dict, Iterable, List, Union
-from xml.sax.handler import property_declaration_handler
-
 
 from shell.exceptions import    InvalidParameterError, \
+                                ShellPipeImpossible, \
                                 ShellReturnedFailure, \
                                 ShellProcessInactive, \
                                 ShellProcessAlreadyRunning
 
 DEFAULT_STDOUT_CHUNK_SIZE = 2**20
 
-class ShellCommand():
+class ShellPipe(abc.ABC):
+    """
+    Abstract Base Class that 
+    """
+    obj = None
+
+    def __new__(
+        cls,
+        obj:Any,
+        *args,
+        **kwargs
+    ):
+        """
+        Create instances of the correct subclass.
+        """
+
+        _type_map = {
+            list:       ShellCommand,
+            bytes:      ShellBytesPipe,
+            str:        ShellStrPipe,
+            io.IOBase:  ShellIOPipe,
+        }
+
+        # Check type mapping table to see if there is a match
+        for _type in _type_map:
+            if (isinstance(obj, _type)):
+                return super().__new__(_type_map[_type])
+        
+        # No match, look for other clues
+        _can_read = callable(getattr(obj, "read", None))
+        _can_write = callable(getattr(obj, "write", None))
+        if (_can_read or _can_write):
+            return super().__new__(ShellIOPipe)
+        
+        raise InvalidParameterError(f"Cannot put object of type '{type(obj).__name__}' in a ShellPipe.")
+
+    def __repr__(self):
+        return f"{type(self).__name__}(obj={repr(self.obj)})"
+
+    @property
+    def result(self):
+        return self.obj
+
+    @abc.abstractmethod
+    def pipe_out(
+        self,
+        *args,
+        **kwargs,
+    )->Union[
+        bytes,
+        ShellReturnedFailure,
+    ]:
+        pass
+
+
+    @abc.abstractmethod
+    def pipe_in(
+        self,
+        stdin:Union[
+            bytes,
+            "ShellPipe",
+        ]
+    )->"ShellPipe":
+        pass
+
+    def __or__(source, dest):
+        """
+        Pipe the stdout from self into other.
+        """
+
+        # Try converting source into a ShellPipe
+        # If it doesn't work then InvalidParameterError will be thrown.
+        if (not isinstance(source, ShellPipe)):
+            source = ShellPipe(source)
+        
+        # Try converting dest into a ShellPipe
+        # If it doesn't work then InvalidParameterError will be thrown.
+        if (not isinstance(dest, ShellPipe)):
+            dest = ShellPipe(dest)
+
+        
+        _stdin = source.pipe_out()
+        
+        if (isinstance(_stdin, Exception)):
+            raise _stdin
+        else:
+            _stdout = dest.pipe_in(_stdin)
+
+            if (isinstance(_stdout, Exception)):
+                raise _stdout
+            else:
+                return _stdout
+
+    def __gt__(self, path):
+        """
+        Pipe the stdout from self into a file.
+        This replaces the contents of a file.
+        Append operator is not supported.
+        """
+        
+        if (not isinstance(path, str)):
+            # This is not a genuine method for comparison.
+            # If we are comparing something else, raise an error.
+            return InvalidParameterError(f"> operator can only be used between from a ShellCommand on a str, but {type(path).__name__} found.")
+
+        # Get the stdout from self
+        _result = self.pipe_out()
+        if (isinstance(_result, Exception)):
+            raise _result
+        
+        try:
+            with open(path, "w+b") as _f:
+                _f.write(_result)
+            
+            return True
+        except (PermissionError,
+                OSError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+                ) as e:
+            warnings.warn(
+                RuntimeWarning(
+                    f"Cannot pipe stdout to file: {str(e)}",
+                )
+            )
+            return False
+    
+
+class ShellBytesPipe(ShellPipe):
+    """
+    Part of a ShellPipe, with bytes literal as data.
+
+    Normally used at the start or end of a ShellPipe; it is not meaningful to use it in between.
+    """
+    def __init__(
+        self,
+        obj:bytes,
+        *args,
+        **kwargs,
+    )->None:
+        self.obj = obj
+
+    @property
+    def obj(
+        self,
+    )->bytes:
+        return self._data
+
+    @obj.setter
+    def obj(
+        self,
+        value:bytes,
+    ):
+        if (isinstance(value, bytes)):
+            self._data = value
+        else:
+            raise InvalidParameterError(
+                f"{type(self).__name__} expects bytes for value."
+            )
+
+    def pipe_out(
+        self,
+        *args,
+        **kwargs,
+    )->Union[
+        bytes,
+        ShellReturnedFailure,
+    ]:
+        return self.obj
+
+    def pipe_in(
+        self,
+        stdin:Union[
+            bytes,
+            "ShellPipe",
+        ]
+    )->"ShellPipe":
+        if (isinstance(stdin, ShellPipe)):
+            _pipe = stdin
+            stdin = _pipe.pipe_out()
+
+        self.obj = stdin
+        return self
+
+
+class ShellStrPipe(ShellBytesPipe):
+    """
+    Part of a ShellPipe, with str literal as data.
+
+    Normally used at the start or end of a ShellPipe; it is not meaningful to use it in between.
+    """
+    @property
+    def obj(
+        self,
+    )->bytes:
+        return self._data.encode("utf-8")
+
+    @obj.setter
+    def obj(
+        self,
+        value:str,
+    ):
+        # Just store the str, we'll do the encoding when value get fetched
+        if (isinstance(value, str)):
+            self._data = value
+        elif (isinstance(value, bytes)):
+            self._data = value.decode("utf-8")
+        else:
+            raise InvalidParameterError(
+                f"{type(self).__name__} expects str for value."
+            )
+
+
+class ShellIOPipe(ShellPipe):
+    """
+    Part of a ShellPipe, with a IO-like object.
+
+    This allows part of the ShellPipe to include Pythonic IO objects, such as:
+    ShellCommand("ls -la") | ShellIOPipe(some_manipulating_io) | ShellCommand("grep something")
+    """
+    def __init__(
+        self,
+        obj:Union[
+            io.IOBase,
+            Any,
+        ],
+        *args,
+        **kwargs,
+    )->None:
+        self.obj = obj
+
+    @property
+    def readable(
+        self,
+    ):
+        return callable(getattr(self.obj, "read", None))
+    
+    @property
+    def writable(
+        self,
+    ):
+        return callable(getattr(self.obj, "write", None))
+
+    def read(
+        self,
+    )->bytes:
+        if (self.readable):
+            _data = self.obj.read()
+            if (isinstance(_data, str)):
+                _data = _data.encode("utf-8")
+
+            return _data
+        else:
+            raise ShellPipeImpossible(f"{type(self.obj).__name__} type object does not support reading; cannot be used for stdout.")
+
+    def write(
+        self,
+        value:bytes,
+    )->None:
+        if (self.writable):
+            try:
+                return self.obj.write(value)
+            except TypeError as e:
+                if (" str" in str(e)):
+                    return self.obj.write(value.decode("utf-8"))
+                else:
+                    raise ShellPipeImpossible(f"{type(self.obj).__name__} type object does not accept bytes writing.")
+        else:
+            raise ShellPipeImpossible(f"{type(self.obj).__name__} type object does not support writing; cannot be used for stdin.")
+
+    def pipe_out(
+        self,
+        *args,
+        **kwargs,
+    )->Union[
+        bytes,
+        ShellReturnedFailure,
+    ]:
+        return self.read()
+
+    def pipe_in(
+        self,
+        stdin:Union[
+            bytes,
+            "ShellPipe",
+        ]
+    )->"ShellPipe":
+        if (isinstance(stdin, ShellPipe)):
+            _pipe = stdin
+            stdin = _pipe.pipe_out()
+
+        self.write(stdin)
+        return self
+        
+        
+class ShellCommand(ShellPipe):
+    """
+    Part of a ShellPipe, with single shell command as a Python instance.
+
+    To prevent shell injection, this does not support ; | > or >> as part of the string.
+    | and > are implemented as Pythonic operators.
+    ; and >> will not be supported.
+    """
 
     process = None
+
+    def __new__(
+        cls,
+        command:list,
+        output:type = bytes,
+        ignore_codes:list=[],
+        timeout:float=None,
+    )->"ShellCommand":
+        # Override the ShellPipe method.
+        return object.__new__(ShellCommand)
 
     def __init__(
         self,
@@ -284,6 +597,52 @@ class ShellCommand():
                 time_used = self.lapsed,
             )
 
+    #########
+    # ShellPipe implementations
+
+    def pipe_out(
+        self,
+        *args,
+        **kwargs,
+    )->Union[
+        bytes,
+        ShellReturnedFailure,
+    ]:
+        """
+        Return the result as bytes.
+        """
+        if (not self.has_run):
+            self.run()
+        
+        _result = self.result
+            
+        if (isinstance(_result, str)):
+            _result = _result.encode("utf-8")
+        
+        return _result 
+
+    def pipe_in(
+        self,
+        stdin:Union[
+              bytes,
+              ShellPipe,
+        ],
+        *args,
+        **kwargs,
+    )->"ShellCommand":
+        """
+        Pipe bytes as stdin into the ShellCommand.
+        
+        Return itself to be chained
+        """
+        self.run(
+            stdin,
+        )
+
+        return self
+
+    #########
+
     def start_timer(
         self,
     )->None:
@@ -398,93 +757,10 @@ class ShellCommand():
                 # print (_bytes_total, len(_chunk))
                 fHnd.write(_chunk)
 
-            if (callback is not None):
+            if (callable(callback)):
                 callback(
                     command=self,
                     bytes_total=_bytes_total,
                 )
 
         threading.Thread(target=_push_data).start()
-
-    def __or__(self, other):
-        """
-        Pipe the stdout from self into other.
-        """
-
-        if (isinstance(other, ShellCommand)):
-            # If the command has not run, then run it without stdin.
-            # If stdin is required, call the command first.
-            if (not self.has_run):
-                self.run()
-
-            if (other.has_run and not other.alive):
-                raise ShellProcessAlreadyRunning("stdout pipe destination process has already completed.")
-
-            _result = self.result
-            # Fetch own result
-            
-            if (not isinstance(_result, ShellReturnedFailure)):
-                # Check result is valid
-                if (isinstance(_result, str)):
-                    _result = _result.encode("utf-8")
-
-                # Start and end the other process
-                other.run(
-                    stdin = _result,
-                )
-
-                # Return the other process instance;
-                # - This allows multiple |s to be chained together as per actual shell.
-                return other
-            else:
-                # If the first command didn't succeed, then raise the Exception.
-                raise _result
-        else:
-            # This is not a genuine method for logical operation.
-            # If we are operating on something else, raise an error.
-            return InvalidParameterError(f"| operator can only be used between two instances of ShellCommand, but {type(other).__name__} found.")
-
-    def __gt__(self, path):
-        """
-        Pipe the stdout from self into a file.
-        This replaces the contents of a file.
-        Append operator is not supported.
-        """
-        
-        if (not isinstance(path, str)):
-            # This is not a genuine method for comparison.
-            # If we are comparing something else, raise an error.
-            return InvalidParameterError(f"> operator can only be used between from a ShellCommand on a str, but {type(path).__name__} found.")
-
-        # If we haven't been run, the do so
-        if (not self.has_run):
-            self.run()
-
-        # Get the stdout from self
-        _result = self.result
-        if (isinstance(_result, str)):
-            _result = _result.encode("utf-8")
-        elif (isinstance(_result, bytes)):
-            pass
-        else:
-            raise _result
-            return _result
-
-        try:
-            with open(path, "w+b") as _f:
-                _f.write(_result)
-            
-            return True
-        except (PermissionError,
-                OSError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-                ) as e:
-            warnings.warn(
-                RuntimeWarning(
-                    f"Cannot pipe stdout to file: {str(e)}",
-                )
-            )
-            return False
-    

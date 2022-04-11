@@ -8,6 +8,9 @@ class ShellError(Exception):
 class InvalidParameterError(ValueError, ShellError):
     pass
 
+class ShellPipeImpossible(OSError, ShellError):
+    pass
+
 class ShellReturnedFailure(RuntimeError, ShellError):
     def __init__(
         self,
