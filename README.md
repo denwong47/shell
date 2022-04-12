@@ -115,7 +115,7 @@ class shell.ShellCommand(
 )
 ```
 
-### Run in blocking mode
+### Execute the command and wait for completion in blocking mode
 ```
 _command.run(
     stdin:bytes,
@@ -125,8 +125,12 @@ _command.run(
     ShellReturnedFailure
 ]
 ```
+If the command hasn't been run, this will cause execution to begin, with `stdin` being fed into the process as `pipe:0`.
 
-### Get excecution result
+This will be blocking until the process exits, or `timeout` is reached, whichever earlier.
+
+
+### Execution result
 ```
 _command.result
 ```
@@ -150,7 +154,7 @@ with shell.ShellCommand("command with streaming stdout") as _command:
 ```
 
 
-### Background thread stdout streaming with callback
+### Non-blocking background thread stdout streaming with callback
 ```
 def _callback(
     command:ShellCommand,
