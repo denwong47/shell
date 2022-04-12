@@ -17,11 +17,14 @@ from shell.exceptions import    InvalidParameterError, \
 
 DEFAULT_STDOUT_CHUNK_SIZE = 2**20
 
+
+
+
 class ShellPipe(abc.ABC):
     """
-    Abstract Base Class that 
+    Abstract Base Class for one member of a Pythonic shell pipe.
     """
-    obj = None
+    obj = None      # this is the object which the Pipe is wrapping around; could be bytes, str, method or I/O-like object.
 
     def __new__(
         cls,
@@ -31,6 +34,13 @@ class ShellPipe(abc.ABC):
     ):
         """
         Create instances of the correct subclass.
+
+        Simply:
+        ShellPipe(["", ])       will return a ShellCommand instance
+        ShellPipe(bytes())      will return a ShellBytesPipe instance
+        ShellPipe(str())        will return a ShellStrPipe instance
+        ShellPipe(lambda :  )   will return a ShellFunctionPipe instance
+        ShellPipe(IOBase())     will return a ShellIOPipe instance
         """
 
         _type_map = {
@@ -40,12 +50,19 @@ class ShellPipe(abc.ABC):
             io.IOBase:  ShellIOPipe,
         }
 
+
         # Check type mapping table to see if there is a match
         for _type in _type_map:
             if (isinstance(obj, _type)):
                 return super().__new__(_type_map[_type])
-        
+
         # No match, look for other clues
+
+        # Callables
+        if (callable(obj)):
+            return super().__new__(ShellFunctionPipe)
+                
+        # I/O-like objects that are not derived from IOBase
         _can_read = callable(getattr(obj, "read", None))
         _can_write = callable(getattr(obj, "write", None))
         if (_can_read or _can_write):
@@ -69,6 +86,9 @@ class ShellPipe(abc.ABC):
         bytes,
         ShellReturnedFailure,
     ]:
+        """
+        
+        """
         pass
 
 
@@ -110,41 +130,59 @@ class ShellPipe(abc.ABC):
             else:
                 return _stdout
 
-    def __gt__(self, path):
+    def __gt__(self, dest):
         """
         Pipe the stdout from self into a file.
         This replaces the contents of a file.
         Append operator is not supported.
+
+        Alternatively it can write stdout into a I/O-like object that support .write().
+        This is virtually identical to ending the chain with another | ShellIOPipe().
         """
-        
-        if (not isinstance(path, str)):
-            # This is not a genuine method for comparison.
-            # If we are comparing something else, raise an error.
-            return InvalidParameterError(f"> operator can only be used between from a ShellCommand on a str, but {type(path).__name__} found.")
 
         # Get the stdout from self
-        _result = self.pipe_out()
-        if (isinstance(_result, Exception)):
-            raise _result
+        _stdout = self.pipe_out()
+
+        if (isinstance(_stdout, Exception)):
+            raise _stdout
         
-        try:
-            with open(path, "w+b") as _f:
-                _f.write(_result)
+        # Split into cases depending on dest type
+        if (isinstance(dest, str)):
+            # str mode; assumed file path
+            path = dest
             
-            return True
-        except (PermissionError,
-                OSError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-                ) as e:
-            warnings.warn(
-                RuntimeWarning(
-                    f"Cannot pipe stdout to file: {str(e)}",
+            try:
+                with open(path, "w+b") as _f:
+                    return self.__gt__(_f)
+
+            except (PermissionError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    ) as e:
+                warnings.warn(
+                    RuntimeWarning(
+                        f"Cannot pipe stdout to file: {str(e)}",
+                    )
                 )
+                return False
+
+        if (callable(getattr(dest, "write"))):
+            # I/O-like mode
+            fHnd = dest
+
+            fHnd.write(
+                _stdout
             )
-            return False
-    
+            return True
+
+        else:
+            # This is not a genuine method for comparison.
+            # If we are comparing something else, raise an error.
+            return InvalidParameterError(f"> operator can only be used between from a ShellCommand on a str, but {type(dest).__name__} found.")
+
+
 
 class ShellBytesPipe(ShellPipe):
     """
@@ -312,10 +350,55 @@ class ShellIOPipe(ShellPipe):
         self.write(stdin)
         return self
         
+
+
+class ShellFunctionPipe(ShellPipe):
+    """
+    Part of a ShellPipe, with a callable object.
+
+    This allows part of the ShellPipe to include Python methods, such as:
+    ShellCommand("ls -la") | ShellFunctionPipe(upper) | ShellCommand("grep something")
+    """
+    def __init__(
+        self,
+        obj:Callable,
+        *args,
+        **kwargs,
+    )->None:
+        self.obj = obj
+        self.output = None
+
+    def pipe_out(
+        self,
+        *args,
+        **kwargs,
+    )->Union[
+        bytes,
+        ShellReturnedFailure,
+    ]:
+        return self.output
+
+    def pipe_in(
+        self,
+        stdin:Union[
+            bytes,
+            "ShellPipe",
+        ]
+    )->"ShellPipe":
+        if (isinstance(stdin, ShellPipe)):
+            _pipe = stdin
+            stdin = _pipe.pipe_out()
+
+        self.output = self.obj(stdin)
+
+        return self
         
 class ShellCommand(ShellPipe):
     """
     Part of a ShellPipe, with single shell command as a Python instance.
+
+    This overwrites most of the dunder functions - it does not inherit much from ShellPipe apart from __or__ and __gt__.
+    However conceptually it is still a member of ShellPipe as it participates in the same way.
 
     To prevent shell injection, this does not support ; | > or >> as part of the string.
     | and > are implemented as Pythonic operators.

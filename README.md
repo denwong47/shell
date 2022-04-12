@@ -1,7 +1,43 @@
 # shell
-Pythonic implementation of shell commands.
+Pythonic implementation of shell commands in Linux and macOS>
 
-## This README is WIP.
+The primary purpose of this module is to use subprocess to run shell commands, including unix piping.
+
+For example:
+```
+# shell
+df | grep tmpfs | sort
+```
+can be written in Python as:
+```
+# Python
+from shell import ShellCommand
+(ShellCommand("df") | ShellCommand("grep tmpfs") | ShellCommand("sort")).result
+```
+and giving a bytes object as an output.
+
+
+It is also possible to add Python functions and objects into the pipe.
+
+For example:
+```
+# Streaming mp3 data into ffmpeg, then piping it to another object for playback such as wave
+from shell import ShellCommand, ShellPipe
+with some_mp3_streaming_io() as _source:
+    with some_audio_wav_device() as _dest:
+        ShellPipe(_source) | ShellCommand("ffmpeg -f mp3 -i pipe:0 -f s16le pipe:1") | ShellPipe(_dest)
+```
+
+```
+# Print all disk data in capital, and save it into ./result.txt
+
+#     Note: bytify() is a decorator function that converts input from bytes to str before feeding it to the underlying function. If its return is str, then it encodes it before returning.
+#           It is useful to wrap built-in functions like str.upper before sending to ShellPipe().
+
+from shell import ShellCommand, ShellPipe, bytify
+ShellCommand("df") | ShellPipe(bytify(str.upper)) > "result.txt"
+```
+
 
 ## shell.run
 Simple method to run a shell command in blocking mode.

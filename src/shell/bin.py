@@ -6,6 +6,29 @@ import warnings
 from shell.exceptions import ShellReturnedFailure
 from shell.classes import ShellCommand
 
+def bytify(func):
+    """
+    Wrapper function to convert any single argument str function into a bytes one.
+    Useful for ShellFunctionPipe().
+    """
+
+    def wrapper(
+        data:bytes,
+        *args,
+        **kwargs,
+    ):
+        if (isinstance(data, bytes)):
+            data_str = data.decode("utf-8")
+        
+        _return = func(data_str)
+        
+        if (isinstance(_return, str)):
+            return _return.encode("utf-8")
+        else:
+            return _return
+
+    return wrapper
+
 def run(
     command:list,
     stdin:Union[str, bytes] = None,
@@ -16,9 +39,6 @@ def run(
 ):
     """
     Old functional implementation of shell command execution.
-    
-    TODO rewrite using ShellCommand.
-    Problem with safe_mode though as its no longer supported.
     """
 
     if (not safe_mode):
