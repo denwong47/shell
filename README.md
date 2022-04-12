@@ -128,12 +128,19 @@ _command.run(
 
 ### Get excecution result
 ```
-_command.result->Union[
-    bytes,
-    str,
-    ShellReturnedFailure
-]
+_command.result
 ```
+Returns either
+- A `bytes` object by default, if exit code is `0` or is in `ignore_codes`.
+- A `str` object if `output` is `str` and exit code is `0` or is in `ignore_codes`.
+- A `shell.exceptions.ShellReturnedFailure` object instance if exit code is anything else; this object
+    - is a subclass of `RuntimeError`.
+    - contains the following attributes:
+        - `.exit_code` - `int`, the return code from the shell process.
+        - `.command` - `List[str]`, the command executed producing the error.
+        - `.stdout` - `bytes`, `stdout` from the process.
+        - `.stderr` - `bytes`, `stderr` from the process.
+        - `.time_used` - `float`, time taken for process to exit, in seconds.
 
 ### Iterative streaming of bytes from stdout
 ```
