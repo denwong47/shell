@@ -1,5 +1,5 @@
 # shell
-Pythonic implementation of shell commands in Linux and macOS>
+Pythonic implementation of shell commands in Linux and macOS.
 
 The primary purpose of this module is to use subprocess to run shell commands, including unix piping.
 
@@ -39,7 +39,10 @@ ShellCommand("df") | ShellPipe(bytify(str.upper)) > "result.txt"
 ```
 
 
+# Methods
+
 ## shell.run
+*Alias of shell.bin.run*
 Simple method to run a shell command in blocking mode.
 ```
 def shell.run(
@@ -61,7 +64,44 @@ def shell.run(
 ]
 ```
 
+## shell.ShellCommandExists
+*Alias of shell.bin.ShellCommandExists*
+Check if shell command returns exit code 127.
+```
+def shell.check_command_exists(
+    command: Union[
+        List[str],
+        str
+    ],
+)
+```
+
+# Classes
+
+## shell.ShellPipe
+*Alias of shell.classes.ShellPipe*
+An abstract base class representing members of a unix shell pipe.
+
+Example of a shell pipe:
+```
+ ShellPipe(_source) | ShellCommand("ffmpeg -f mp3 -i pipe:0 -f s16le pipe:1") | ShellPipe(_dest)
+```
+Each of these elements are instances of ShellPipe subtypes. These include:
+- `ShellBytesPipe` - A simple wrapper around a `bytes` object. Generally used at the head or tail of a pipe.
+- `ShellStrPipe` - A simple wrapper around a `str` object. Generally used at the head or tail of a pipe.
+- `ShellFunctionPipe` - A python function as part of a pipe. Function should have syntax `func(stdin:bytes) -> bytes`. Use `shell.bytify(str_func)` to decorate string functions.
+- `ShellIOPipe` - An IO like object that supports `.read()` and/or `.write()`. When used upstream in a pipe, `.read()` will be called as `stdin` for the next segment; when used downstream, `.write(stdout)` will be called using the `stdout` from the previous segment.
+- `ShellCommand` - A single shell command. `stdin` and `stdout` will be treated just like a unix pipe. *See further usages below.*
+
+You do not need to construct directly using these subclasses.
+The constructor for `ShellPipe` will select the most appropriate subtype for `obj` when `ShellPipe(obj)` is called.
+
+Each pipe segment when called in this syntax is blocking, as one segment depends on the previous one for its output.
+
+
 ## shell.ShellCommand
+*Alias of shell.classes.ShellCommand*
+*Subtype of ShellPipe*
 Class for advanced Shell operations.
 ```
 class shell.ShellCommand(
@@ -129,13 +169,3 @@ with shell.ShellCommand("command with streaming stdin") as _command:
 ```
 
 
-## shell.ShellCommandExists
-Check if shell command returns exit code 127.
-```
-def shell.check_command_exists(
-    command: Union[
-        List[str],
-        str
-    ],
-)
-```
