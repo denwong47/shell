@@ -63,6 +63,7 @@ def shell.run(
     ShellReturnedFailure
 ]
 ```
+The return value is identical to **ShellCommand.result**; see below.
 
 ## shell.ShellCommandExists
 *Alias of shell.bin.ShellCommandExists*
@@ -129,6 +130,7 @@ If the command hasn't been run, this will cause execution to begin, with `stdin`
 
 This will be blocking until the process exits, or `timeout` is reached, whichever earlier.
 
+The return value is identical to **ShellCommand.result**; see below.
 
 ### Execution result
 ```
