@@ -39,6 +39,12 @@ def run(
 ):
     """
     Old functional implementation of shell command execution.
+    
+    This provides the easiest method to run a shell command without fiddling with any of the classes.
+    Prior to v0.1.0, this is also the main method; so this is included for backward compatibility purpose.
+
+    Originally safe_mode is implemented to allow plain shell mode - which permits the use of ; | > etc operators chaining multiple commands together.
+    This has since been made obsolete to avoid shell injection.
     """
 
     if (not safe_mode):
@@ -55,6 +61,10 @@ def run(
         return _command.end(
             stdin
         )
+
+    """
+    Follwoing is the original code for <0.1.0
+    """
 
     # if (isinstance(command, str) and safe_mode):
     #     command = shlex.split(command)
