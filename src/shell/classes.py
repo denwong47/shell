@@ -415,7 +415,7 @@ class ShellCommand(ShellPipe):
         timeout:float=None,
     )->"ShellCommand":
         # Override the ShellPipe method.
-        return object.__new__(ShellCommand)
+        return object.__new__(cls)
 
     def __init__(
         self,
