@@ -28,12 +28,14 @@ class ShellCommandExists():
         Put the instance back into the library.
         """
 
+        _command_str = " ".join(command) if (isinstance(command, (list, tuple))) else command
+
         _instance = cls._instances.get(
-            command,
+            _command_str,
             super().__new__(cls)
         )
 
-        cls._instances[command] = _instance
+        cls._instances[_command_str] = _instance
 
         return _instance
     
