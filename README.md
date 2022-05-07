@@ -4,12 +4,12 @@ Pythonic implementation of shell commands in Linux and macOS.
 The primary purpose of this module is to use subprocess to run shell commands, including unix piping.
 
 For example:
-```
+```shell
 # shell
 df | grep tmpfs | sort
 ```
 can be written in Python as:
-```
+```python
 # Python
 from shell import ShellCommand
 (ShellCommand("df") | ShellCommand("grep tmpfs") | ShellCommand("sort")).result
@@ -20,7 +20,7 @@ and giving a bytes object as an output.
 It is also possible to add Python functions and objects into the pipe.
 
 For example:
-```
+```python
 # Streaming mp3 data into ffmpeg, then piping it to another object for playback such as wave
 from shell import ShellCommand, ShellPipe
 with some_mp3_streaming_io() as _source:
@@ -28,7 +28,7 @@ with some_mp3_streaming_io() as _source:
         ShellPipe(_source) | ShellCommand("ffmpeg -f mp3 -i pipe:0 -f s16le pipe:1") | ShellPipe(_dest)
 ```
 
-```
+```python
 # Print all disk data in capital, and save it into ./result.txt
 
 #     Note: bytify() is a decorator function that converts input from bytes to str before feeding it to the underlying function. If its return is str, then it encodes it before returning.
@@ -44,7 +44,7 @@ ShellCommand("df") | ShellPipe(bytify(str.upper)) > "result.txt"
 ## shell.run
 *Alias of shell.bin.run*
 Simple method to run a shell command in blocking mode.
-```
+```python
 def shell.run(
     command:Union[
         str,
@@ -68,7 +68,7 @@ The return value is identical to **ShellCommand.result**; see below.
 ## shell.ShellCommandExists
 *Alias of shell.bin.ShellCommandExists*
 Check if shell command returns exit code 127.
-```
+```python
 def shell.check_command_exists(
     command: Union[
         List[str],
@@ -84,7 +84,7 @@ def shell.check_command_exists(
 An abstract base class representing members of a unix shell pipe.
 
 Example of a shell pipe:
-```
+```python
  ShellPipe(_source) | ShellCommand("ffmpeg -f mp3 -i pipe:0 -f s16le pipe:1") | ShellPipe(_dest)
 ```
 Each of these elements are instances of ShellPipe subtypes. These include:
@@ -104,7 +104,7 @@ Each pipe segment when called in this syntax is blocking, as one segment depends
 *Alias of shell.classes.ShellCommand*
 *Subtype of ShellPipe*
 Class for advanced Shell operations.
-```
+```python
 class shell.ShellCommand(
     command:Union[
         str,
@@ -117,7 +117,7 @@ class shell.ShellCommand(
 ```
 
 ### Execute the command and wait for completion in blocking mode
-```
+```python
 _command.run(
     stdin:bytes,
 )->Union[
@@ -133,7 +133,7 @@ This will be blocking until the process exits, or `timeout` is reached, whicheve
 The return value is identical to **ShellCommand.result**; see below.
 
 ### Execution result
-```
+```python
 _command.result
 ```
 Returns either
@@ -149,7 +149,7 @@ Returns either
         - `.time_used` - `float`, time taken for process to exit, in seconds.
 
 ### Iterative streaming of bytes from stdout
-```
+```python
 with shell.ShellCommand("command with streaming stdout") as _command:
     for _chunk in _command.iter_stdout():
         do_something_with_chunk(_chunk)
@@ -157,7 +157,7 @@ with shell.ShellCommand("command with streaming stdout") as _command:
 
 
 ### Non-blocking background thread stdout streaming with callback
-```
+```python
 def _callback(
     command:ShellCommand,
     bytes_total:int,
@@ -175,7 +175,7 @@ with shell.ShellCommand("command with streaming stdout") as _command:
 ```
 
 ### Iterative streaming of bytes into stdin
-```
+```python
 with shell.ShellCommand("command with streaming stdin") as _command:
     for _chunk in _data_chunks:
         _command.stream_stdin(_chunk)

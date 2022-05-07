@@ -788,12 +788,13 @@ class ShellCommand(ShellPipe):
         """
         Iter over stdout
         """
-
         while (_data := self.process.stdout.read(chunk_size)):
-            if (len(_data) <= 0):
+            if (len(_data)):
+                yield _data
+            else:
                 break
 
-            yield _data
+            
 
     @alive_only
     def stream_stdin(
@@ -837,7 +838,6 @@ class ShellCommand(ShellPipe):
             _bytes_total = 0
             for _chunk in self.iter_stdout(chunk_size=chunk_size):
                 _bytes_total += len(_chunk)
-                # print (_bytes_total, len(_chunk))
                 fHnd.write(_chunk)
 
             if (callable(callback)):
